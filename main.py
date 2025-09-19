@@ -1,10 +1,13 @@
 import re
 
 import pdfplumber
+from pathlib import Path
 import polars as pl
 
 pattern_umsatzsteuer = re.compile(r"Umsatzsteuer.*?(\d+(?:[.,]\d+)?)\s*%")
 pattern_rechnungsdatum = re.compile(r"Rechnungsdatum\s*(\d{2}\.\d{2}\.\d{4})")
+
+pattern_rechnungsnummer = re.compile(r"Rechnung \s*(RE-PS-\d{4}-\d+)")
 
 
 
@@ -14,7 +17,6 @@ def extract_rechnungen(file):
         with pdfplumber.open(file) as pdf:
             page = pdf.pages[0]
             text = page.extract_text()
-            print(text)
             table = page.extract_table()
 
             lines = text.splitlines()
@@ -32,12 +34,18 @@ def extract_rechnungen(file):
                 if match:
                     # nur den Teil vor dem Datum behalten
                     date = match.group(1)  # "Rechn
+                match = pattern_rechnungsnummer.search(line)
+                if match:
+                    # nur den Teil vor dem Datum behalten
+                    rechnung = match.group(1)  # "Rechn
+                
         headers = table[0]
         rows = table[1:]
         umsatzszeuer_string = str(umsatzsteuer) + "(%)"
         df = pl.DataFrame(rows, schema=headers)
         df = df.with_columns([
             pl.lit(umsatzszeuer_string).alias("Ust(%)"),
+            pl.lit(rechnung).alias("Rechnungsnummer"),
             pl.lit(name).alias("Name"),
             pl.lit(date).alias("Rechnungsdatum"),
             (pl.col("Preis").str.replace("€", "")  # € entfernen
@@ -47,14 +55,17 @@ def extract_rechnungen(file):
         ])
     except Exception as e:
         logger.error(f"Fehler beim Verarbeiten der Datei {file}: {e}")
-    return None
+        return None
+    return df
 files = list(Path(".").glob("*.pdf"))
 df_all = None
 for file in files:
+    print(file)
     df = extract_rechnungen(file)
     if df is not None:
         if df_all is None:
             df_all = df
         else:
             df_all = pl.concat([df_all, df], how="vertical")
-df.write_excel("rechnungen.xlsx")
+df_all = df_all.select(["Rechnungsdatum","Artikel", "Rechnungsnummer","Name","Anzahl","Preis","Summe","Ust(%)"])
+df_all.write_excel("rechnungen.xlsx")
